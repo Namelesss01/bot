@@ -1,4 +1,3 @@
-// index.js — версия с автоматическим добавлением -100 и поддержкой username
 import { TelegramClient } from 'telegram';
 import { StringSession } from 'telegram/sessions/index.js';
 import { NewMessage } from 'telegram/events/NewMessage.js';
@@ -28,7 +27,13 @@ function saveJSON(path, data) {
 
 let db = loadJSON(DB_FILE, {
   pairs: [],
-  filters: ['торг', 'цена', 'срочно', 'недорого', 'без посредников'],
+  filters: [
+    'цена', 'срочно', 'без посредников', 'торг', 'недорого',
+    'дордой', 'дорд', 'прох', 'проход', 'конт', 'кон', 'ряд', 'р.',
+    '-1', '-2', '-3', '-4', '-5', 'азс', 'север', 'арктика', 'гермес',
+    '/', '|', '\\', 'пр', 'к.', 'китайский', 'кит', 'лэп', 'кишка',
+    'алкан', 'меркурий', 'брючный', 'адрес', 'адр.', '893/8'
+  ],
   admins: [],
   forwardingEnabled: true,
   stats: []
@@ -41,17 +46,20 @@ await client.start({
   phoneCode: async () => await input.text('💬 Код из Telegram: '),
   onError: (err) => console.log('❌ Ошибка входа:', err),
 });
-
 console.log('✅ TelegramClient запущен');
 console.log('🔑 StringSession:', client.session.save());
 
 const bot = new Telegraf(botToken);
+bot.launch();
+console.log('🤖 Telegraf-бот запущен');
 
-bot.start((ctx) => ctx.reply('👋 Добро пожаловать! /addpair /togglepair /toggleall /listpairs /getid'));
+bot.start((ctx) =>
+  ctx.reply('👋 Добро пожаловать! Команды:\n/addpair\n/togglepair\n/toggleall\n/listpairs\n/getid\n/addfilter\n/removefilter\n/listfilters')
+);
 
 bot.command('addpair', async (ctx) => {
-  const [srcInput, tgtInput] = ctx.message.text.split(' ').slice(1);
-  if (!srcInput || !tgtInput) return ctx.reply('⚠️ Пример: /addpair @source @target');
+  const args = ctx.message.text.split(' ').slice(1);
+  if (args.length < 2) return ctx.reply('⚠️ Пример: /addpair @source @target [threadId]');
 
   try {
     const getId = async (val) => {
@@ -62,14 +70,15 @@ bot.command('addpair', async (ctx) => {
       return BigInt(val.startsWith('-100') ? val : `-100${val}`);
     };
 
-    const source = await getId(srcInput);
-    const target = await getId(tgtInput);
+    const source = await getId(args[0]);
+    const target = await getId(args[1]);
+    const threadId = args[2] ? parseInt(args[2]) : undefined;
 
-    const newPair = { id: Date.now(), source, target, enabled: true };
+    const newPair = { id: Date.now(), source, target, enabled: true, threadId };
     db.pairs.push(newPair);
     saveJSON(DB_FILE, db);
-    saveJSON(PAIRS_FILE, db.pairs.map(p => ({ sourceId: p.source.toString(), targetId: p.target.toString() })));
-    ctx.reply(`✅ Связка создана:\nИз: ${source}\nВ: ${target}`);
+    saveJSON(PAIRS_FILE, db.pairs.map(p => ({ sourceId: p.source.toString(), targetId: p.target.toString(), threadId: p.threadId })));
+    ctx.reply(`✅ Связка создана:\nИз: ${source}\nВ: ${target}${threadId ? `\n🧵 Thread ID: ${threadId}` : ''}`);
   } catch (e) {
     console.error('❌ Ошибка при добавлении пары:', e);
     ctx.reply('❌ Ошибка при получении ID. Проверьте ники или ID.');
@@ -94,10 +103,10 @@ bot.command('togglepair', (ctx) => {
 bot.command('listpairs', (ctx) => {
   if (db.pairs.length === 0) return ctx.reply('📭 Связок нет');
   db.pairs.forEach(p => {
-    ctx.reply(`🔗 ID: ${p.id}\nИз: ${p.source}\nВ: ${p.target}\nСтатус: ${p.enabled ? '✅' : '❌'}`,
-      Markup.inlineKeyboard([
-        Markup.button.callback(p.enabled ? 'Отключить' : 'Включить', `toggle_${p.id}`)
-      ]));
+    ctx.reply(
+      `🔗 ID: ${p.id}\nИз: ${p.source}\nВ: ${p.target}\nСтатус: ${p.enabled ? '✅' : '❌'}${p.threadId ? `\n🧵 Thread: ${p.threadId}` : ''}`,
+      Markup.inlineKeyboard([Markup.button.callback(p.enabled ? 'Отключить' : 'Включить', `toggle_${p.id}`)])
+    );
   });
 });
 
@@ -112,18 +121,47 @@ bot.command('getid', async (ctx) => {
   }
 });
 
+bot.command('addfilter', (ctx) => {
+  const word = ctx.message.text.split(' ')[1]?.toLowerCase();
+  if (!word) return ctx.reply('⚠️ Пример: /addfilter срочно');
+  if (db.filters.includes(word)) return ctx.reply('⚠️ Это слово уже есть');
+  db.filters.push(word);
+  saveJSON(DB_FILE, db);
+  ctx.reply(`✅ Слово "${word}" добавлено в фильтры`);
+});
+
+bot.command('removefilter', (ctx) => {
+  const word = ctx.message.text.split(' ')[1]?.toLowerCase();
+  if (!word) return ctx.reply('⚠️ Пример: /removefilter срочно');
+  const index = db.filters.indexOf(word);
+  if (index === -1) return ctx.reply('⚠️ Такого слова нет');
+  db.filters.splice(index, 1);
+  saveJSON(DB_FILE, db);
+  ctx.reply(`🗑️ Слово "${word}" удалено из фильтров`);
+});
+
+bot.command('listfilters', (ctx) => {
+  if (db.filters.length === 0) return ctx.reply('📭 Список фильтров пуст');
+  ctx.reply(`📃 Слова-фильтры:\n\n${db.filters.map((w, i) => `${i + 1}. ${w}`).join('\n')}`);
+});
+
 bot.on('callback_query', (ctx) => {
   const id = parseInt(ctx.callbackQuery.data.replace('toggle_', ''));
   const pair = db.pairs.find(p => p.id === id);
   if (!pair) return;
   pair.enabled = !pair.enabled;
   saveJSON(DB_FILE, db);
-  ctx.editMessageText(`🔗 ID: ${pair.id}\nИз: ${pair.source}\nВ: ${pair.target}\nСтатус: ${pair.enabled ? '✅' : '❌'}`,
-    Markup.inlineKeyboard([Markup.button.callback(pair.enabled ? 'Отключить' : 'Включить', `toggle_${pair.id}`)]));
+  ctx.editMessageText(
+    `🔗 ID: ${pair.id}\nИз: ${pair.source}\nВ: ${pair.target}\nСтатус: ${pair.enabled ? '✅' : '❌'}${pair.threadId ? `\n🧵 Thread: ${pair.threadId}` : ''}`,
+    Markup.inlineKeyboard([Markup.button.callback(pair.enabled ? 'Отключить' : 'Включить', `toggle_${pair.id}`)])
+  );
 });
 
-bot.launch();
-console.log('🤖 Telegraf-бот запущен');
+const MESSAGE_BATCH_DELAY = 1500;
+const messageBuffers = {};
+function getPairKey(source, target) {
+  return `${source.toString()}-${target.toString()}`;
+}
 
 client.addEventHandler(async (event) => {
   const msg = event.message;
@@ -131,26 +169,74 @@ client.addEventHandler(async (event) => {
   if (!fromId || !db.forwardingEnabled) return;
 
   for (const pair of db.pairs.filter(p => p.source === fromId && p.enabled)) {
-    const text = msg.message || '';
-    if (db.filters.some(w => text.toLowerCase().includes(w))) return;
+    let text = msg.message || '';
 
-    try {
-      if (msg.media) {
-        await client.sendFile(pair.target, {
-          file: msg.media,
-          caption: text,
-          forceDocument: false
-        });
-      } else {
-        await client.sendMessage(pair.target, { message: text });
-      }
+    // Исправленная фильтрация без \b, замена слова на столько точек, сколько длина слова
+    db.filters.forEach(word => {
+      const safeWord = word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const regex = new RegExp(safeWord, 'gi');
+      text = text.replace(regex, match => '.'.repeat(match.length));
+    });
 
-      db.stats.push({ source: pair.source, target: pair.target, time: Date.now() });
-      saveJSON(DB_FILE, db);
-      console.log(`📤 Переслано из ${pair.source} в ${pair.target}`);
-    } catch (e) {
-      console.error('❌ Ошибка пересылки:', e.message);
+    const pairKey = getPairKey(pair.source, pair.target);
+    if (!messageBuffers[pairKey]) {
+      messageBuffers[pairKey] = { timer: null, messages: [] };
     }
+
+    messageBuffers[pairKey].messages.push({
+      id: msg.id,
+      text,
+      media: msg.media,
+      threadId: pair.threadId,
+      senderId: msg.senderId?.toString(),
+      fromId
+    });
+
+    if (messageBuffers[pairKey].timer) {
+      clearTimeout(messageBuffers[pairKey].timer);
+    }
+
+    messageBuffers[pairKey].timer = setTimeout(async () => {
+      const buffer = messageBuffers[pairKey];
+      const messagesToSend = buffer.messages;
+      buffer.messages = [];
+      buffer.timer = null;
+
+      try {
+        const internalChatId = Math.abs(Number(fromId)) - 1000000000000;
+        const sourceLinkBase = `https://t.me/c/${internalChatId}`;
+        const isAdmin = messagesToSend.some(m => db.admins.includes(m.senderId));
+
+        const buttons = isAdmin
+          ? [[Markup.button.url('🔗 Перейти к источнику', `${sourceLinkBase}/${messagesToSend[0].id}`)]]
+          : [];
+
+        for (let i = 0; i < messagesToSend.length; i++) {
+          const m = messagesToSend[i];
+          if (m.media) {
+            await client.sendFile(pair.target, {
+              file: m.media,
+              caption: m.text,
+              forceDocument: false,
+              replyTo: m.threadId,
+              buttons: i === 0 ? buttons : undefined,
+            });
+          } else if (m.text.trim()) {
+            await client.sendMessage(pair.target, {
+              message: m.text,
+              replyTo: m.threadId,
+              buttons: i === 0 ? buttons : undefined,
+            });
+          }
+        }
+
+        db.stats.push({ source: pair.source, target: pair.target, time: Date.now() });
+        saveJSON(DB_FILE, db);
+        console.log(`📤 Переслано из ${pair.source} в ${pair.target} (пакет из ${messagesToSend.length} сообщений)`);
+      } catch (e) {
+        console.error('❌ Ошибка пересылки:', e.message);
+      }
+    }, MESSAGE_BATCH_DELAY);
   }
 }, new NewMessage({}));
 
