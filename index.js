@@ -14,6 +14,7 @@ const botToken = process.env.BOT_TOKEN;
 const session = new StringSession(process.env.STRING_SESSION);
 const DB_FILE = './db.json';
 
+// === Работа с базой данных ===
 function loadJSON(path, fallback) {
   try {
     return fs.existsSync(path) ? JSON.parse(fs.readFileSync(path, 'utf-8')) : fallback;
@@ -32,6 +33,7 @@ let db = loadJSON(DB_FILE, {
   stats: []
 });
 
+// === Запуск TelegramClient ===
 const client = new TelegramClient(session, apiId, apiHash, { connectionRetries: 5 });
 await client.start({
   phoneNumber: async () => await input.text('📱 Телефон: '),
@@ -69,6 +71,16 @@ bot.start((ctx) => {
 });
 bot.command('menu', (ctx) => ctx.reply('Главное меню:', getMainKeyboard()));
 
+// === Ответы на кнопки ===
+bot.hears('➕ Добавить связку', (ctx) => ctx.reply('ℹ️ Используй команду:\n/addpair @source @target [threadId]', getMainKeyboard()));
+bot.hears('📋 Список связок', (ctx) => ctx.telegram.sendMessage(ctx.chat.id, '/listpairs'));
+bot.hears('📛 Добавить фильтр', (ctx) => ctx.reply('ℹ️ Используй команду:\n/addfilter слово', getMainKeyboard()));
+bot.hears('📝 Список фильтров', (ctx) => ctx.telegram.sendMessage(ctx.chat.id, '/listfilters'));
+bot.hears('🔁 Включить/Выключить все', (ctx) => ctx.telegram.sendMessage(ctx.chat.id, '/toggleall'));
+bot.hears('📊 Статистика', (ctx) => ctx.telegram.sendMessage(ctx.chat.id, '/stats'));
+bot.hears('🆔 Получить ID', (ctx) => ctx.reply('ℹ️ Используй команду:\n/getid @username', getMainKeyboard()));
+
+// === Вспомогательные функции ===
 function isAdmin(id) {
   return db.admins.includes(id);
 }
@@ -80,13 +92,14 @@ const getId = async (val) => {
   return val.startsWith('-100') ? val : `-100${val}`;
 };
 
-// === Обработка сообщений ===
 const MESSAGE_BATCH_DELAY = 1500;
 const messageBuffers = {};
 function getPairKey(source, target) {
   return `${source}-${target}`;
 }
 
+// === Основная логика пересылки ===
+// === Основная логика пересылки ===
 client.addEventHandler(async (event) => {
   const msg = event.message;
   const fromId = msg.chatId?.value?.toString();
@@ -119,37 +132,40 @@ client.addEventHandler(async (event) => {
             messageLink = `https://t.me/c/${internalChatId}/${m.id}`;
           }
 
-          const inlineMarkup = new Api.ReplyInlineMarkup({
-            rows: [
-              new Api.KeyboardButtonRow({
-                buttons: [
-                  new Api.KeyboardButtonUrl({
-                    text: '🔗 Перейти к источнику',
-                    url: messageLink
-                  })
-                ]
-              })
-            ]
-          });
+          // Формируем текст сообщения
+          const originalText = m.text?.trim() || '';
+          const linkText = '💸';
+          const finalText = originalText ? `${originalText}\n${linkText}` : linkText;
+          
+          // Создаем entity для ссылки
+          const entities = [
+            new Api.MessageEntityTextUrl({
+              offset: finalText.length - linkText.length,
+              length: linkText.length,
+              url: messageLink
+            })
+          ];
+
+          // Удаляем все существующие entities из оригинального сообщения
+          const sendOptions = {
+            peer: pair.target,
+            message: finalText,
+            replyToMsgId: m.threadId,
+            entities,
+            noWebpage: true,
+            linkPreview: false
+          };
 
           if (m.media) {
             await client.invoke(
               new Api.messages.SendMedia({
-                peer: pair.target,
-                media: await client.uploadFile({ file: m.media }),
-                message: m.text || '',
-                replyToMsgId: m.threadId,
-                buttons: inlineMarkup
+                ...sendOptions,
+                media: await client.uploadFile({ file: m.media })
               })
             );
-          } else if (m.text.trim()) {
+          } else {
             await client.invoke(
-              new Api.messages.SendMessage({
-                peer: pair.target,
-                message: m.text,
-                replyToMsgId: m.threadId,
-                buttons: inlineMarkup
-              })
+              new Api.messages.SendMessage(sendOptions)
             );
           }
         }
@@ -162,9 +178,6 @@ client.addEventHandler(async (event) => {
     }, MESSAGE_BATCH_DELAY);
   }
 }, new NewMessage({}));
-
-
-
 
 // === Команды бота ===
 bot.command('addpair', async (ctx) => {
